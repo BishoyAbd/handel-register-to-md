@@ -6,9 +6,13 @@ import time
 
 HOME_URL = "https://www.handelsregister.de/"
 
-async def search_and_download(company_name: str):
+async def search_and_download(company_name: str, registration_number: str = None):
     """
     Working scraper using ACTUAL element names and document link patterns
+    
+    Args:
+        company_name: The company name to search for
+        registration_number: Optional registration number (HRB, HRA, etc.) for more accurate matching
     """
     async with async_playwright() as p:
         browser = await p.chromium.launch(headless=True)
@@ -44,13 +48,28 @@ async def search_and_download(company_name: str):
                 print(f"   ❌ Navigation failed: {e}")
                 return
             
+            # Extract HRB number from search query if present
+            import re
+            hrb_match = re.search(r'HRB\s*(\d+)', company_name, re.IGNORECASE)
+            target_hrb = hrb_match.group(1) if hrb_match else None
+            company_name_clean = re.sub(r'HRB\s*\d+', '', company_name, flags=re.IGNORECASE).strip()
+            
+            if target_hrb:
+                print(f"   🔢 Found HRB number in search: {target_hrb}")
+                print(f"   🏢 Clean company name: {company_name_clean}")
+                # Try HRB search first
+                search_query = f"HRB {target_hrb}"
+            else:
+                print(f"   🔍 No HRB number found, using company name search")
+                search_query = company_name
+            
             # Fill search form
             print("3. Filling search form...")
             try:
                 search_field = page.locator('#form\\:schlagwoerter')
                 await search_field.wait_for(timeout=10000)
                 await search_field.clear()
-                await search_field.fill(company_name)
+                await search_field.fill(search_query)
             except Exception as e:
                 print(f"   ❌ Search field not found: {e}")
                 return
@@ -218,8 +237,8 @@ async def search_and_download(company_name: str):
             if document_links:
                 print(f"   ✅ Found {len(document_links)} document links")
                 
-                # Extract company names from the page
-                company_names = await page.evaluate("""
+                # Extract company names AND registration numbers from the page
+                company_data = await page.evaluate("""
                     () => {
                         const companies = [];
                         const tableRows = document.querySelectorAll('tr');
@@ -235,17 +254,29 @@ async def search_and_download(company_name: str):
                             });
                             
                             if (hasAdOrCd) {
-                                // Look for company name in the first few cells of the row
+                                let companyName = null;
+                                let registrationNumber = null;
+                                
+                                // Look for company name and registration number in ALL cells of the row
                                 const cells = row.querySelectorAll('td');
                                 if (cells.length > 0) {
-                                    // Try to find the company name in the first few cells
-                                    for (let i = 0; i < Math.min(3, cells.length); i++) {
+                                    // Check all cells for company names and registration numbers
+                                    for (let i = 0; i < cells.length; i++) {
                                         const cell = cells[i];
                                         const text = cell.textContent.trim();
                                         
-                                        // Look for text that contains company-like patterns
+                                        // Look for registration number (HRB format) - PRIORITY 1
+                                        if (text && text.includes('HRB') && /HRB\\s*\\d+/.test(text)) {
+                                            const hrbMatch = text.match(/HRB\\s*(\\d+)/);
+                                            if (hrbMatch) {
+                                                registrationNumber = hrbMatch[1];
+                                                console.log('Found HRB number:', registrationNumber);
+                                            }
+                                        }
+                                        
+                                        // Look for text that contains company-like patterns (but not registration numbers)
                                         if (text && 
-                                            text.length > 10 &&  // Must be substantial
+                                            text.length > 5 &&  // Reduced minimum length
                                             /[a-zA-Z]/.test(text) &&  // Must contain letters
                                             !text.includes('1.)') && 
                                             !text.includes('2.)') && 
@@ -277,155 +308,334 @@ async def search_and_download(company_name: str):
                                             !text.includes('dokumentList') &&
                                             !text.includes('ui-corner-all') &&
                                             !text.includes('ui-menuitem-link') &&
-                                            !text.includes('ui-submenu-link')) {
+                                            !text.includes('ui-submenu-link') &&
+                                            !text.includes('District court') &&
+                                            !text.includes('Amtsgericht') &&
+                                            !text.includes('Frankfurt am Main') &&  // Exclude location names
+                                            !text.includes('Hesse') &&  // Exclude state names
+                                            !/HRB\\s*\\d+/.test(text)) {  // Exclude HRB numbers from company names
                                             
                                             // Clean up the text - remove extra whitespace and newlines
                                             const cleanText = text.replace(/\\s+/g, ' ').trim();
-                                            if (cleanText.length > 10) {
-                                                companies.push(cleanText);
-                                                break; // Found company name for this row, move to next
+                                            if (cleanText.length > 5) {
+                                                companyName = cleanText;
+                                                console.log('Found company name:', cleanText);
                                             }
                                         }
+                                        
+                                        // Fallback: Look for business-related keywords that might indicate company names
+                                        if (!companyName && text && 
+                                            text.length > 5 && 
+                                            /[a-zA-Z]/.test(text) &&
+                                            (text.includes('Bank') || 
+                                             text.includes('GmbH') || 
+                                             text.includes('AG') || 
+                                             text.includes('KG') || 
+                                             text.includes('OHG') ||
+                                             text.includes('Deutsche') ||
+                                             text.includes('Aktiengesellschaft') ||
+                                             text.includes('Gesellschaft')) &&
+                                            !text.includes('HRB') &&
+                                            !text.includes('Frankfurt am Main') &&
+                                            !text.includes('Hesse')) {
+                                            
+                                            const cleanText = text.replace(/\\s+/g, ' ').trim();
+                                            companyName = cleanText;
+                                            console.log('Found company name (fallback):', cleanText);
+                                        }
+                                    }
+                                    
+                                    // If we found both company name and registration number, add them
+                                    if (companyName && registrationNumber) {
+                                        companies.push({
+                                            name: companyName,
+                                            hrb: registrationNumber
+                                        });
+                                        console.log('Added company:', companyName, 'HRB:', registrationNumber);
                                     }
                                 }
                             }
                         });
                         
+                        console.log('Total companies found:', companies.length);
                         return companies;
                     }
                 """)
                 
-                print(f"   📊 Found companies: {company_names[:3]}...")  # Show first 3
+                # Convert the company data to a more usable format
+                company_names = [f"{company['name']} (HRB {company['hrb']})" for company in company_data]
+                company_hrb_map = {company['name']: company['hrb'] for company in company_data}
                 
-                # Find the best matching company
-                def find_best_match(search_name, company_list):
-                    """Find the company that best matches the search name"""
-                    search_name_lower = search_name.lower().strip()
+                print(f"   📊 Found companies: {len(company_names)} total")
+                print("   📋 All companies found:")
+                for i, company in enumerate(company_names):
+                    print(f"      {i+1:2d}. {company}")
+                
+                # Find the best matching company using both name and registration number
+                def find_best_match(search_name, company_data_list, company_hrb_map, target_registration=None):
+                    """Find the company that best matches the search name with smart legal form handling and registration number matching"""
+                    
+                    if target_registration:
+                        print(f"   🔢 Target registration number: {target_registration}")
+                    else:
+                        print(f"   🔍 No target registration number specified")
+                    
+                    # Legal form mappings (full names to abbreviations)
+                    legal_form_mappings = {
+                        'aktien': 'ag',
+                        'gesellschaft mit beschränkter haftung': 'gmbh',
+                        'gesellschaft mit beschraenkter haftung': 'gmbh',  # German umlaut alternative
+                        'offene handelsgesellschaft': 'ohg',
+                        'kommanditgesellschaft': 'kg',
+                        'eingetragener verein': 'ev',
+                        'eingetragene genossenschaft': 'eg',
+                        'gesellschaft bürgerlichen rechts': 'gbr',
+                        'gesellschaft buergerlichen rechts': 'gbr',  # German umlaut alternative
+                        'partnerschaftsgesellschaft': 'partg',
+                        'europäische wirtschaftliche interessenvereinigung': 'ewiv',
+                        'europaeische wirtschaftliche interessenvereinigung': 'ewiv',  # German umlaut alternative
+                        'europäische aktiengesellschaft': 'se',
+                        'europaeische aktiengesellschaft': 'se',  # German umlaut alternative
+                    }
+                    
+                    # Create normalized versions of search name and company names
+                    def normalize_company_name(name):
+                        """Normalize company name by standardizing legal forms and removing common noise"""
+                        name_lower = name.lower().strip()
+                        
+                        # Replace full legal form names with abbreviations
+                        for full_form, abbrev in legal_form_mappings.items():
+                            name_lower = name_lower.replace(full_form, abbrev)
+                        
+                        # Remove common noise words and punctuation
+                        noise_words = ['hrb', 'amtsgericht', 'register', 'handelsregister', 'commercial register']
+                        for noise in noise_words:
+                            name_lower = name_lower.replace(noise, '')
+                        
+                        # Clean up extra spaces and punctuation
+                        import re
+                        name_lower = re.sub(r'[^\w\s]', ' ', name_lower)
+                        name_lower = re.sub(r'\s+', ' ', name_lower).strip()
+                        
+                        return name_lower
+                    
+                    search_name_normalized = normalize_company_name(search_name)
                     best_match = None
                     best_score = 0
                     
-                    for company in company_list:
-                        company_lower = company.lower().strip()
+                    # Debug: print what we're searching for
+                    print(f"   🔍 Searching for normalized: '{search_name_normalized}'")
+                    
+                    # Extract core business words (excluding legal forms)
+                    legal_forms = set(['ag', 'gmbh', 'ohg', 'kg', 'ev', 'eg', 'gbr', 'partg', 'ewiv', 'se'])
+                    search_words = set(search_name_normalized.split())
+                    core_search_words = [word for word in search_words if word not in legal_forms]
+                    
+                    print(f"   🎯 Core business words: {core_search_words}")
+                    
+                    for company_full in company_data_list:
+                        # Extract company name and HRB number from the full string
+                        import re
+                        company_match = re.match(r'(.+?)\s*\(HRB\s*(\d+)\)', company_full)
+                        if not company_match:
+                            continue
+                            
+                        company_name = company_match.group(1).strip()
+                        company_hrb = company_match.group(2)
+                        
+                        company_normalized = normalize_company_name(company_name)
+                        company_words = set(company_normalized.split())
+                        core_company_words = [word for word in company_words if word not in legal_forms]
+                        
+                        # Calculate base score from name matching
+                        name_score = 0
                         
                         # Exact match gets highest score
-                        if search_name_lower == company_lower:
-                            return company, 100
+                        if search_name_normalized == company_normalized:
+                            name_score = 100
+                            print(f"   🎯 Exact name match found: '{company_name}'")
                         
-                        # Check if search name is contained in company name (highest priority)
-                        if search_name_lower in company_lower:
-                            score = len(search_name_lower) / len(company_lower) * 90
-                            if score > best_score:
-                                best_score = score
-                                best_match = company
+                        # HIGHEST PRIORITY: Check if ALL core search words are contained in company name
+                        elif core_search_words and all(search_word in company_normalized for search_word in core_search_words):
+                            name_score = 95 + (len(core_search_words) * 2)  # Base 95 + bonus for each matching word
+                            print(f"   🏆 ALL core words match: '{company_name}' (name score: {name_score:.1f})")
                         
-                        # Check if company name is contained in search name
-                        elif company_lower in search_name_lower:
-                            score = len(company_lower) / len(search_name_lower) * 80
-                            if score > best_score:
-                                best_score = score
-                                best_match = company
+                        # HIGH PRIORITY: Check if search name is contained in company name
+                        elif search_name_normalized in company_normalized:
+                            name_score = 90 + (len(search_name_normalized) / len(company_normalized) * 5)
+                            print(f"   📈 Search contained in company: '{company_name}' (name score: {name_score:.1f})")
                         
-                        # Check for word matches
-                        search_words = set(search_name_lower.split())
-                        company_words = set(company_lower.split())
-                        common_words = search_words.intersection(company_words)
-                        if common_words:
-                            score = len(common_words) / max(len(search_words), len(company_words)) * 70
-                            if score > best_score:
-                                best_score = score
-                                best_match = company
+                        # MEDIUM PRIORITY: Check if company name is contained in search name
+                        elif company_normalized in search_name_normalized:
+                            name_score = 80 + (len(company_normalized) / len(search_name_normalized) * 5)
+                            print(f"   📈 Company contained in search: '{company_name}' (name score: {name_score:.1f})")
                         
-                        # Check for partial word matches (e.g., "Competence" matches "Competence Call Center")
-                        for search_word in search_words:
-                            for company_word in company_words:
-                                if search_word in company_word or company_word in search_word:
-                                    score = min(len(search_word), len(company_word)) / max(len(search_word), len(company_word)) * 60
-                                    if score > best_score:
-                                        best_score = score
-                                        best_match = company
+                        # Check for word matches with legal form awareness
+                        else:
+                            common_words = search_words.intersection(company_words)
+                            if common_words:
+                                name_score = len(common_words) / max(len(search_words), len(company_words)) * 60
+                                print(f"   📈 Word match: '{company_name}' (name score: {name_score:.1f})")
+                            
+                            # Check for partial word matches
+                            else:
+                                for search_word in search_words:
+                                    for company_word in company_words:
+                                        if search_word in company_word or company_word in search_word:
+                                            name_score = min(len(search_word), len(company_word)) / max(len(search_word), len(company_word)) * 50
+                                            print(f"   📈 Partial word match: '{company_name}' (name score: {name_score:.1f})")
+                                            break
+                                    if name_score > 0:
+                                        break
+                        
+                        # Calculate final score with HRB number prioritization
+                        # First, check if we have a target HRB number to match against
+                        # For now, we'll prioritize companies with any HRB number over those without
+                        # In the future, if we have a specific target HRB, we can add that logic here
+                        
+                        # Registration number prioritization - this is the PRIMARY matching criteria
+                        registration_bonus = 0
+                        if company_hrb:
+                            # If we have a target registration number, this is the PRIMARY match
+                            if target_registration and company_hrb == target_registration:
+                                registration_bonus = 1000  # Massive priority for exact registration match
+                                print(f"   🎯 EXACT REGISTRATION MATCH! Target: {target_registration}, Company: {company_hrb} - PRIORITY 1")
+                            else:
+                                registration_bonus = 100  # Good bonus for having any registration number
+                        else:
+                            # No registration number - this company gets lower priority
+                            registration_bonus = -50  # Penalty for no registration number
+                        
+                        # Calculate final score: registration matching is PRIMARY, name matching is secondary
+                        final_score = registration_bonus + (name_score * 0.1)  # Registration gets 10x more weight than name
+                        
+                        # Add HRB number information to the output for better identification
+                        company_display = f"{company_name} (HRB {company_hrb})"
+                        
+                        # Debug: show scoring breakdown
+                        print(f"   📊 Scoring for '{company_display}': name_score={name_score:.1f}, registration_bonus={registration_bonus}, final_score={final_score:.1f}")
+                        
+                        if final_score > best_score:
+                            best_score = final_score
+                            best_match = company_display
+                            print(f"   🏆 NEW BEST MATCH: '{company_display}' (final score: {final_score:.1f})")
+                    
+                    print(f"   🏆 Final best match: '{best_match}' (final score: {best_score:.1f})")
+                    
+                    # If no registration match found, try to find any company by name only
+                    if not best_match and target_registration:
+                        print(f"   🔄 No registration {target_registration} match found, falling back to name-only matching...")
+                        for company_full in company_data_list:
+                            company_match = re.match(r'(.+?)\s*\(HRB\s*(\d+)\)', company_full)
+                            if company_match:
+                                company_name = company_match.group(1).strip()
+                                company_hrb = company_match.group(2)
+                                
+                                company_normalized = normalize_company_name(company_name)
+                                
+                                # Simple name matching as fallback
+                                if search_name_normalized in company_normalized or company_normalized in search_name_normalized:
+                                    company_display = f"{company_name} (HRB {company_hrb})"
+                                    print(f"   🔄 Fallback match found: '{company_display}'")
+                                    return company_display, 50  # Lower score for fallback
                     
                     return best_match, best_score
                 
                 # Find the best matching company
-                best_company, match_score = find_best_match(company_name, company_names)
+                best_company, match_score = find_best_match(company_name, company_names, company_hrb_map, registration_number)
                 
                 if best_company:
                     print(f"   🎯 Best match: '{best_company}' (score: {match_score:.1f})")
                     
-                    # Find the index of the best matching company
-                    try:
-                        best_company_index = company_names.index(best_company)
-                    except ValueError:
-                        best_company_index = 0
+                    # Extract company name and HRB number from the best match
+                    import re
+                    company_match = re.match(r'(.+?)\s*\(HRB\s*(\d+)\)', best_company)
+                    if company_match:
+                        company_name_only = company_match.group(1).strip()
+                        company_hrb = company_match.group(2)
+                        print(f"   🏢 Company: {company_name_only}")
+                        print(f"   🔢 HRB Number: {company_hrb}")
+                    else:
+                        company_name_only = best_company
+                        company_hrb = None
+                        print(f"   🏢 Company: {company_name_only}")
+                        print(f"   ⚠️  No HRB number found")
                     
                     # Filter documents to only those belonging to the best matching company
                     # We need to find the specific AD and CD documents for this company
                     company_documents = []
                     
-                    # Find the company row in the table
-                    company_row = None
-                    try:
-                        company_row = await page.evaluate(f"""
-                            () => {{
-                                const companyElements = document.querySelectorAll('span.marginLeft20');
-                                for (let i = 0; i < companyElements.length; i++) {{
-                                    if (companyElements[i].textContent.trim() === '{best_company}') {{
-                                        // Find the parent row that contains this company
-                                        let element = companyElements[i];
-                                        while (element && element.tagName !== 'TR') {{
-                                            element = element.parentElement;
-                                        }}
-                                        return i; // Return the index of the company row
-                                    }}
-                                }}
-                                return -1;
-                            }}
-                        """)
-                    except Exception as e:
-                        print(f"   ⚠️  Could not find company row: {e}")
-                        company_row = 0
+                    # Find AD and CD documents for this company by looking for rows that contain the registration number
+                    # Since registration numbers are unique, this is more reliable than company name matching
+                    company_docs = await page.evaluate("""
+                        (registrationNumber) => {
+                            const docs = [];
+                            const companyNames = [];
+                            const tableRows = document.querySelectorAll('tr');
+                            
+                            tableRows.forEach(row => {
+                                const rowText = row.textContent;
+                                // Check if this row contains the specific registration number
+                                if (registrationNumber && rowText.includes('HRB ' + registrationNumber)) {
+                                    // Extract company name from this row
+                                    const cells = row.querySelectorAll('td');
+                                    cells.forEach(cell => {
+                                        const text = cell.textContent.trim();
+                                        // Look for company names (not registration numbers, not navigation text)
+                                        if (text && 
+                                            text.length > 5 && 
+                                            /[a-zA-Z]/.test(text) &&
+                                            !text.includes('HRB') &&
+                                            !text.includes('Frankfurt am Main') &&
+                                            !text.includes('Hesse') &&
+                                            !text.includes('aktuell') &&
+                                            !text.includes('1.)') &&
+                                            !text.includes('2.)') &&
+                                            !text.includes('3.)') &&
+                                            !text.includes('AD') &&
+                                            !text.includes('CD')) {
+                                            companyNames.push(text);
+                                        }
+                                    });
+                                    
+                                    // Find all AD and CD links in this row
+                                    const links = row.querySelectorAll('a[id*="j_idt"]');
+                                    links.forEach(link => {
+                                        const text = link.textContent.trim();
+                                        if (text === 'AD' || text === 'CD') {
+                                            docs.push({
+                                                id: link.id,
+                                                text: text,
+                                                href: link.href
+                                            });
+                                        }
+                                    });
+                                }
+                            });
+                            
+                            return { docs: docs, companyNames: companyNames };
+                        }
+                    """, company_hrb)
                     
-                    if company_row >= 0:
-                        # Find AD and CD documents specifically for this company row
-                        company_docs = await page.evaluate(f"""
-                            (companyRowIndex) => {{
-                                const companyElements = document.querySelectorAll('span.marginLeft20');
-                                if (companyRowIndex >= companyElements.length) return [];
-                                
-                                let companyElement = companyElements[companyRowIndex];
-                                let row = companyElement;
-                                while (row && row.tagName !== 'TR') {{
-                                    row = row.parentElement;
-                                }}
-                                
-                                if (!row) return [];
-                                
-                                const docs = [];
-                                // Find all links in this row and check their text content
-                                const links = row.querySelectorAll('a[id*="j_idt"]');
-                                links.forEach(link => {{
-                                    const text = link.textContent.trim();
-                                    if (text === 'AD' || text === 'CD') {{
-                                        docs.push({{
-                                            id: link.id,
-                                            text: text,
-                                            href: link.href
-                                        }});
-                                    }}
-                                }});
-                                
-                                return docs;
-                            }}
-                        """, company_row)
-                        
-                        for doc in company_docs:
-                            company_documents.append({
-                                'link': doc,
-                                'doc_type': doc['text'],
-                                'company': best_company
-                            })
+                    # Extract documents and company names from the results
+                    if isinstance(company_docs, dict) and 'docs' in company_docs:
+                        docs_list = company_docs['docs']
+                        extracted_company_names = company_docs.get('companyNames', [])
+                    else:
+                        docs_list = company_docs
+                        extracted_company_names = []
                     
-                    print(f"   📥 Found {len(company_documents)} AD/CD documents for '{best_company}'")
+                    # Use extracted company name if available, otherwise fall back to the matched name
+                    actual_company_name = extracted_company_names[0] if extracted_company_names else company_name_only
+                    
+                    for doc in docs_list:
+                        company_documents.append({
+                            'link': doc,
+                            'doc_type': doc['text'],
+                            'company': actual_company_name
+                        })
+                    
+                    print(f"   📥 Found {len(company_documents)} AD/CD documents for '{actual_company_name}'")
                     
                     # Download only documents for the best matching company
                     downloaded = 0
@@ -435,7 +645,7 @@ async def search_and_download(company_name: str):
                             doc_type = doc_info['doc_type']
                             company_name_clean = doc_info['company']
                             
-                            print(f"   📥 Downloading {doc_type} for: {company_name_clean[:30]}...")
+                            print(f"   📥 Downloading {doc_type} for: {company_name_clean[:50]}...")
                             
                             # Click the document link using attribute selector to avoid CSS escaping issues
                             link_element = page.locator(f'a[id="{doc_info["link"]["id"]}"]')
@@ -533,13 +743,17 @@ async def search_and_download(company_name: str):
             print("🔚 Done!")
 
 if __name__ == "__main__":
-    if len(sys.argv) != 2:
-        print("Usage: python pdf_scraper.py 'company name'")
+    if len(sys.argv) < 2 or len(sys.argv) > 3:
+        print("Usage: python scraper_working.py 'company name' [registration_number]")
+        print("Examples:")
+        print("  python scraper_working.py 'Deutsche Bank AG'")
+        print("  python scraper_working.py 'Deutsche Bank AG' '30000'")
         sys.exit(1)
     
     company_name = sys.argv[1]
+    registration_number = sys.argv[2] if len(sys.argv) == 3 else None
     
     # Create downloads directory if it doesn't exist
     pathlib.Path("downloads").mkdir(exist_ok=True)
     
-    asyncio.run(search_and_download(company_name))
+    asyncio.run(search_and_download(company_name, registration_number))
