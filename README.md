@@ -8,6 +8,7 @@ A modular Python package containing production-ready web scrapers. It currently 
 - In-memory data interface (no forced file I/O)
 - Extracts PDFs and Markdown from official documents
 - Enum-based document filtering (AD, CD)
+- Enhanced registration number matching with LCS algorithm
 - Robust error signaling with retry recommendations
 - CLI and programmatic APIs
 
@@ -42,8 +43,10 @@ playwright install chromium
 # Download all available documents (AD and CD)
 hr-scraper "Company Name GmbH"
 
-# With registration number (HRB)
-hr-scraper "Company Name GmbH" "HRB 12345"
+# With registration number (HRB) for precise matching
+hr-scraper "Company Name GmbH" --registration-number "HRB 12345"
+hr-scraper "Company Name GmbH" --registration-number "123 456"
+hr-scraper "Company Name GmbH" --registration-number "123456A"
 
 # Download specific document types
 hr-scraper "Company Name GmbH" --document-types AD
@@ -54,7 +57,7 @@ hr-scraper "Company Name GmbH" --document-types AD CD
 hr-scraper "Company Name GmbH" --json
 
 # Save PDFs and Markdown to disk (demo helper)
-hr-scraper "Company Name GmbH" --save-files --output-dir output
+hr-scraper "Company Name GmbH" --output-dir output
 ```
 
 ### 3) Programmatic Usage
@@ -66,8 +69,12 @@ from scraper.hr_scraper import ScraperApp, DocumentType
 async def main():
     app = ScraperApp(headless=True)
 
-    # Download only AD
-    result = await app.run("Adler Real Estate GmbH", document_types=[DocumentType.AD])
+    # Download only AD with registration number
+    result = await app.run(
+        "Adler Real Estate GmbH", 
+        registration_number="259502",
+        document_types=[DocumentType.AD]
+    )
 
     # Download only CD
     # result = await app.run("Adler Real Estate GmbH", document_types=[DocumentType.CD])
@@ -76,16 +83,32 @@ async def main():
     # result = await app.run("Adler Real Estate GmbH", document_types=[DocumentType.AD, DocumentType.CD])
 
     if result["success"]:
-        print("Company:", result["company_info"])  # { name, hrb, search_query }
+        print("Company:", result["company_info"])
         for doc in result["documents"]:
             pdf_bytes = doc["pdf_content"]
             md_text = doc["markdown_content"]
-            # Do whatever you want (DB, storage, APIs, analytics, etc.)
+            # Process data as needed
     else:
-        print("Error:", result["error"])  # decide based on retry_recommended
+        print("Error:", result["error"])
 
 asyncio.run(main())
 ```
+
+## Enhanced Registration Number Matching
+
+The scraper now supports intelligent registration number matching using the Longest Common Subsequence (LCS) algorithm:
+
+- **Flexible Input Formats**: Accepts various HRB formats:
+  - `259502` (clean number)
+  - `259 502` (with spaces)
+  - `HRB 259502` (with prefix)
+  - `HRB: 259502` (with colon)
+  - `259502A` (with letter suffix)
+  - `HRB 259 502 A` (complex format)
+
+- **Smart Similarity Scoring**: Provides similarity scores (0.0-1.0) for registration numbers
+- **Fallback Matching**: Gracefully falls back to name-only matching when registration parsing fails
+- **Precise Company Identification**: Registration numbers significantly improve matching accuracy
 
 ## Document Type Filtering
 
@@ -118,9 +141,6 @@ The `ScraperApp.run(...)` method returns a dictionary:
 }
 ```
 
-- Use `success` and `retry_recommended` to implement robust retry logic
-- PDFs are returned as bytes, Markdown as strings — you control persistence
-
 ## Dependencies
 
 - Playwright (>= 1.54)
@@ -129,23 +149,14 @@ The `ScraperApp.run(...)` method returns a dictionary:
 
 Install exact versions from `requirements.txt` or let pip/uv resolve from `pyproject.toml`.
 
-## Troubleshooting
-
-- Run `playwright install chromium` once per environment
-- Increase timeouts in `scraper/hr_scraper/config.py` for slow networks
-- Use `--json` to inspect detailed results
-- Check `debug_info` when failures occur
-
 ## Development
 
 ```bash
-# Lint/format/type-check (if you installed optional dev extras)
-black scraper/
-isort scraper/
-mypy scraper/
-
 # Run test client (examples of AD/CD filtering)
 python test_client_documents.py
+
+# Test enhanced registration number matching
+python test_registration_matching.py
 ```
 
 ## Versioning & Distribution
