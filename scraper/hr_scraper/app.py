@@ -22,11 +22,11 @@ class ScraperApp:
     async def run(self, company_name: str, registration_number: Optional[str] = None, 
                   document_types: Optional[List[DocumentType]] = None) -> Dict[str, Union[str, bytes, Dict]]:
         """
-        Run the scraper and return extracted data.
+        Run the scraper for a specific company.
         
         Args:
             company_name: Name of the company to search for
-            registration_number: Optional registration number (HRB)
+            registration_number: Optional registration number (HRB) for more precise matching
             document_types: Optional list of document types to download (AD, CD, or both)
                            If None, downloads all available documents
         
@@ -39,7 +39,7 @@ class ScraperApp:
             - 'documents': list of dicts with document data (PDF bytes and markdown)
             - 'debug_info': dict with debug information for troubleshooting
         """
-        logger.info(f"Starting scraper for: '{company_name}' with document types: {[dt.value for dt in document_types] if document_types else 'all'}")
+        logger.info(f"Starting scraper for: '{company_name}' with registration: '{registration_number}' and document types: {[dt.value for dt in document_types] if document_types else 'all'}")
         
         result = {
             'success': False,
@@ -58,17 +58,41 @@ class ScraperApp:
                 await navigator.go_to_homepage()
                 await navigator.go_to_search_page()
 
-                # Use the company name for the search, not the HRB number
+                # Perform search
                 await navigator.perform_search(company_name)
-
-                companies = await extractor.extract_companies()
+                
+                # Small delay to ensure results are loaded
+                import asyncio
+                await asyncio.sleep(1)
+                
+                # Extract companies from search results
+                companies = await extractor.extract_companies(search_query=company_name)
+                logger.info(f"Initial extraction found {len(companies)} companies")
+                
+                # If no companies found, wait a bit more and try again
                 if not companies:
-                    result['error'] = "No companies found on the results page."
+                    logger.info("No companies found initially, waiting and retrying...")
+                    await asyncio.sleep(2)
+                    companies = await extractor.extract_companies(search_query=company_name)
+                    logger.info(f"First retry found {len(companies)} companies")
+                    
+                    # Second retry if still no companies
+                    if not companies:
+                        logger.info("Still no companies found, waiting longer and retrying again...")
+                        await asyncio.sleep(3)
+                        companies = await extractor.extract_companies(search_query=company_name)
+                        logger.info(f"Second retry found {len(companies)} companies")
+                
+                if not companies:
+                    result['error'] = "No companies found on the results page after multiple retries."
                     result['retry_recommended'] = True
                     return result
 
-                hrb_match = re.search(r'HRB\s*(\d+)', company_name, re.IGNORECASE)
-                target_hrb = registration_number or (hrb_match.group(1) if hrb_match else None)
+                # Smart HRB extraction and matching
+                target_hrb = self._extract_hrb_from_input(company_name, registration_number)
+                if target_hrb:
+                    logger.info(f"Using registration number for matching: {target_hrb}")
+                
                 best_match = self.company_matcher.find_best_match(company_name, companies, target_hrb)
                 if not best_match:
                     result['error'] = "No suitable company match found."
@@ -179,3 +203,43 @@ class ScraperApp:
                 result['debug_info']['error_screenshot_saved'] = True
         
         return result
+
+    def _extract_hrb_from_input(self, company_name: str, registration_number: Optional[str] = None) -> Optional[str]:
+        """
+        Smart extraction of HRB registration number from input.
+        Handles various formats: "HRB 123456", "123456", "123 456", "123456A", etc.
+        """
+        import re
+        
+        # If explicit registration number provided, clean and validate it
+        if registration_number:
+            # Remove common prefixes and clean - handle both HRB and HRB: formats
+            cleaned = re.sub(r'^(hrb|hrb\s*:?\s*)', '', registration_number.lower().strip())
+            # Remove spaces and validate format
+            cleaned = re.sub(r'\s+', '', cleaned)
+            # Check if it's a valid HRB format (numbers + optional letter)
+            if re.match(r'^\d{1,8}[a-zA-Z]?$', cleaned):
+                return cleaned.upper()
+            logger.warning(f"Invalid registration number format: {registration_number}")
+            return None
+        
+        # Try to extract from company name
+        hrb_patterns = [
+            r'hrb\s*:?\s*(\d{1,8})\s*([a-zA-Z])?',  # HRB: 123456A or HRB 123 456
+            r'hrb\s*:?\s*(\d{1,8})',                 # HRB: 123456
+            r'(\d{1,8})\s*([a-zA-Z])?',              # 123456A or 123 456
+            r'(\d{1,8})',                             # 123456
+        ]
+        
+        for pattern in hrb_patterns:
+            match = re.search(pattern, company_name, re.IGNORECASE)
+            if match:
+                number = match.group(1)
+                letter = match.group(2) if len(match.groups()) > 1 else ''
+                # Clean up the number (remove spaces)
+                clean_number = re.sub(r'\s+', '', number)
+                result = clean_number + letter.upper() if letter else clean_number
+                logger.info(f"Extracted HRB from company name: {result}")
+                return result
+        
+        return None

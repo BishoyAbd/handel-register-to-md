@@ -46,30 +46,33 @@ def save_documents_to_files(result, output_dir: str = "client_output"):
             f.write(doc['markdown_content'])
         print(f"  Saved Markdown: {md_path}")
 
-def main():
+async def main():
     """Main CLI entry point"""
     parser = argparse.ArgumentParser(description="Scrape company documents from Handelsregister.")
-    parser.add_argument("company_name", type=str, help="The name of the company to search for.")
-    parser.add_argument("registration_number", type=str, nargs='?', default=None, help="The registration number (HRB) of the company.")
-    parser.add_argument("--show-browser", action="store_true", help="Run the browser in visible mode (not headless).")
-    parser.add_argument("--save-files", action="store_true", help="Save returned documents to files (demonstration).")
-    parser.add_argument("--output-dir", type=str, default="client_output", help="Output directory for saved files (if --save-files is used).")
-    parser.add_argument("--json", action="store_true", help="Output results in JSON format.")
-    parser.add_argument("--document-types", nargs="+", choices=["AD", "CD"], 
-                       help="Specific document types to download (AD=Current Extract, CD=Chronological Extract). If not specified, downloads all available.")
+    parser.add_argument('company_name', help='Name of the company to search for')
+    parser.add_argument('--registration-number', '-r', help='Optional registration number (HRB) for more precise matching')
+    parser.add_argument('--document-types', '-t', nargs='+', choices=['AD', 'CD'], 
+                       help='Document types to download (AD, CD, or both). If not specified, downloads all available.')
+    parser.add_argument('--output-dir', '-o', default='.', help='Output directory for saving files (default: current directory)')
+    parser.add_argument('--json', action='store_true', help='Output results in JSON format')
+    parser.add_argument('--headless', action='store_true', default=True, help='Run browser in headless mode (default: True)')
     args = parser.parse_args()
 
-    # Convert document type strings to enums
+    # Convert document types to enum if specified
     document_types = None
     if args.document_types:
         document_types = [DocumentType(dt) for dt in args.document_types]
-        print(f"📄 Requested document types: {args.document_types}")
 
     # Default to headless=True, unless --show-browser is passed
-    app = ScraperApp(headless=not args.show_browser)
+    app = ScraperApp(headless=not args.headless)
     
     try:
-        result = asyncio.run(app.run(args.company_name, args.registration_number, document_types))
+        # Run the scraper
+        result = await app.run(
+            company_name=args.company_name,
+            registration_number=args.registration_number,
+            document_types=document_types
+        )
         
         if args.json:
             # Output JSON format for programmatic use
@@ -93,7 +96,7 @@ def main():
                 print(f"     Markdown preview: {doc['markdown_content'][:100]}...")
             
             # Demonstrate saving files if requested
-            if args.save_files:
+            if args.output_dir != '.': # Only save if output_dir is not default
                 save_documents_to_files(result, args.output_dir)
                 
         else:
@@ -164,4 +167,4 @@ else:
         sys.exit(1)
 
 if __name__ == "__main__":
-    main()
+    asyncio.run(main())

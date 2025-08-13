@@ -9,73 +9,120 @@ class DataExtractor:
     def __init__(self, page: Page):
         self.page = page
 
-    async def extract_companies(self) -> List[Company]:
+    async def extract_companies(self, search_query: Optional[str] = None) -> List[Company]:
         logger.info("Extracting companies from the page...")
-        company_data = await self.page.evaluate("""
-            () => {
+        search_words = []
+        if search_query:
+            # Basic tokenization; scoring happens in the browser
+            search_words = [w.lower() for w in search_query.split() if len(w) > 1]
+        
+        company_data = await self.page.evaluate(r"""
+            (searchWords) => {
                 const companies = [];
-                const tableRows = document.querySelectorAll('tr');
-                
-                tableRows.forEach(row => {
-                    const links = row.querySelectorAll('a[id*="j_idt"]');
-                    let hasAdOrCd = false;
-                    links.forEach(link => {
-                        const text = link.textContent.trim();
-                        if (text === 'AD' || text === 'CD') {
-                            hasAdOrCd = true;
-                        }
-                    });
+                const tableRows = Array.from(document.querySelectorAll('tr'));
+
+                const clean = (txt) => (txt || '').replace(/\s+/g, ' ').trim();
+                const isCandidateText = (txt) => {
+                    if (!txt) return false;
+                    const t = txt.toLowerCase();
+                    if (t.length < 5) return false;
+                    if (!/[a-zA-Z]/.test(t)) return false;
+                    if (t.includes('historie')) return false;
+                    if (t.includes('ad') && t.trim() === 'ad') return false;
+                    if (t.includes('cd') && t.trim() === 'cd') return false;
+                    if (/hrb\s*\d+/.test(t)) return false;
+                    return true;
+                };
+
+                const scoreCandidate = (txt, words) => {
+                    if (!words || words.length === 0) return 0;
+                    const t = txt.toLowerCase();
+                    let score = 0;
+                    for (const w of words) {
+                        if (t.includes(w)) score += 1;
+                    }
+                    return score;
+                };
+
+                for (const row of tableRows) {
+                    const rowText = clean(row.textContent);
                     
-                    if (hasAdOrCd) {
-                        let companyName = null;
-                        let registrationNumber = null;
-                        
-                        const cells = row.querySelectorAll('td');
-                        if (cells.length > 0) {
-                            for (let i = 0; i < cells.length; i++) {
-                                const cell = cells[i];
-                                const text = cell.textContent.trim();
-                                
-                                if (text && text.includes('HRB') && /HRB\s*\d+/.test(text)) {
-                                    const hrbMatch = text.match(/HRB\s*(\d+)/);
-                                    if (hrbMatch) {
-                                        registrationNumber = hrbMatch[1];
-                                    }
-                                }
-                                
-                                if (text && 
-                                    text.length > 5 &&
-                                    /[a-zA-Z]/.test(text) &&
-                                    !text.includes('1.)') && 
-                                    !text.includes('2.)') && 
-                                    !text.includes('3.)') && 
-                                    !text.includes('Historie') &&
-                                    !text.includes('AD') &&
-                                    !text.includes('CD') &&
-                                    !/HRB\s*\d+/.test(text)
-                                ) {
-                                    const cleanText = text.replace(/\s+/g, ' ').trim();
-                                    if (cleanText.length > 5) {
-                                        companyName = cleanText;
-                                    }
-                                }
-                            }
-                            
-                            if (companyName) {
-                                companies.push({
-                                    name: companyName,
-                                    hrb: registrationNumber
-                                });
-                            }
+                    // Check for documents (AD/CD links)
+                    const hasDocs = Array.from(row.querySelectorAll('a[id*="j_idt"]')).some(a => {
+                        const txt = clean(a.textContent).toUpperCase();
+                        return txt === 'AD' || txt === 'CD';
+                    });
+
+                    // Check for HRB number
+                    const hrbMatch = rowText.match(/HRB\s*(\d+)/i);
+                    const registrationNumber = hrbMatch ? hrbMatch[1] : null;
+
+                    // More flexible: accept rows that have either documents OR HRB OR look like company data
+                    const hasCompanyData = rowText.length > 20 && 
+                                         /[a-zA-Z]{3,}/.test(rowText) && 
+                                         !rowText.includes('Historie') &&
+                                         !rowText.includes('Zurück');
+
+                    if (!hasDocs && !registrationNumber && !hasCompanyData) {
+                        continue;
+                    }
+
+                    // Gather candidate name texts from likely elements
+                    const candidateElements = [
+                        ...row.querySelectorAll('strong, b, h1, h2, h3, h4, h5, h6, small, span, div, td')
+                    ];
+                    const seen = new Set();
+                    const candidates = [];
+                    
+                    for (const el of candidateElements) {
+                        const txt = clean(el.textContent);
+                        if (!txt || seen.has(txt)) continue;
+                        seen.add(txt);
+                        if (isCandidateText(txt)) {
+                            candidates.push(txt);
                         }
                     }
-                });
+
+                    if (candidates.length === 0) {
+                        // Fallback: split row text and look for meaningful segments
+                        const parts = rowText.split(/\s{2,}|\n|\r/).map(clean).filter(isCandidateText);
+                        candidates.push(...parts);
+                    }
+
+                    if (candidates.length === 0) continue;
+
+                    // Choose best candidate by search word overlap, then by length
+                    candidates.sort((a, b) => {
+                        const sa = scoreCandidate(a, searchWords);
+                        const sb = scoreCandidate(b, searchWords);
+                        if (sa !== sb) return sb - sa;
+                        return b.length - a.length;
+                    });
+
+                    const companyName = candidates[0];
+                    if (companyName) {
+                        companies.push({ 
+                            name: companyName, 
+                            hrb: registrationNumber,
+                            hasDocs: hasDocs,
+                            rowText: rowText.substring(0, 100) // Debug info
+                        });
+                    }
+                }
                 return companies;
             }
-        """)
+        """, search_words)
         
         companies = [Company(name=c['name'], hrb=c['hrb']) for c in company_data]
         logger.info(f"Found {len(companies)} companies.")
+        
+        # Log debug info for troubleshooting
+        if company_data:
+            for i, c in enumerate(company_data):
+                logger.debug(f"Company {i+1}: '{c['name']}' (HRB: {c['hrb']}, HasDocs: {c['hasDocs']})")
+                if c.get('rowText'):
+                    logger.debug(f"  Row preview: {c['rowText']}...")
+        
         return companies
 
     async def extract_documents_for_company(self, company: Company, document_types: Optional[List[DocumentType]] = None) -> List[Document]:
@@ -98,7 +145,7 @@ class DataExtractor:
         requested_types = [dt.value for dt in document_types]
         logger.info(f"Requested document types: {requested_types}")
 
-        company_docs = await self.page.evaluate("""
+        company_docs = await self.page.evaluate(r"""
             (args) => {
                 const registrationNumber = args.registrationNumber;
                 const requestedTypes = args.requestedTypes;
@@ -110,7 +157,7 @@ class DataExtractor:
                     if (registrationNumber && rowText.includes('HRB ' + registrationNumber)) {
                         const links = row.querySelectorAll('a[id*="j_idt"]');
                         links.forEach(link => {
-                            const text = link.textContent.trim();
+                            const text = (link.textContent || '').trim();
                             if (requestedTypes.includes(text)) {
                                 docs.push({
                                     id: link.id,
@@ -140,12 +187,12 @@ class DataExtractor:
 
     async def get_ui_messages(self) -> List[str]:
         logger.info("Checking for UI messages on page...")
-        messages = await self.page.evaluate("""
+        messages = await self.page.evaluate(r"""
             (selectors) => {
                 let messages = [];
                 selectors.forEach(selector => {
                     document.querySelectorAll(selector).forEach(el => {
-                        if (el.textContent.trim()) {
+                        if (el.textContent && el.textContent.trim()) {
                             messages.push(el.textContent.trim());
                         }
                     });

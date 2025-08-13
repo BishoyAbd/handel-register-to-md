@@ -26,6 +26,70 @@ class CompanyMatcher:
         self.legal_forms = set(self.legal_form_mappings.values())
         self.noise_words = ['hrb', 'amtsgericht', 'register', 'handelsregister', 'commercial register']
 
+    def _longest_common_subsequence(self, s1: str, s2: str) -> int:
+        """
+        Calculate the length of the longest common subsequence between two strings.
+        This is useful for fuzzy matching of registration numbers that might have slight variations.
+        """
+        m, n = len(s1), len(s2)
+        dp = [[0] * (n + 1) for _ in range(m + 1)]
+        
+        for i in range(1, m + 1):
+            for j in range(1, n + 1):
+                if s1[i-1] == s2[j-1]:
+                    dp[i][j] = dp[i-1][j-1] + 1
+                else:
+                    dp[i][j] = max(dp[i-1][j], dp[i][j-1])
+        
+        return dp[m][n]
+
+    def _normalize_registration_number(self, hrb: str) -> str:
+        """Normalize registration number by removing spaces and converting to uppercase."""
+        if not hrb:
+            return ""
+        return re.sub(r'\s+', '', hrb.upper())
+
+    def _calculate_registration_similarity(self, target_hrb: str, company_hrb: str) -> float:
+        """
+        Calculate similarity between two registration numbers using multiple strategies.
+        Returns a score between 0.0 and 1.0.
+        """
+        if not target_hrb or not company_hrb:
+            return 0.0
+        
+        # Normalize both numbers
+        target_norm = self._normalize_registration_number(target_hrb)
+        company_norm = self._normalize_registration_number(company_hrb)
+        
+        # Exact match (highest priority)
+        if target_norm == company_norm:
+            return 1.0
+        
+        # Check if one is contained in the other
+        if target_norm in company_norm or company_norm in target_norm:
+            return 0.9
+        
+        # Calculate longest common subsequence similarity
+        lcs_length = self._longest_common_subsequence(target_norm, company_norm)
+        max_length = max(len(target_norm), len(company_norm))
+        lcs_similarity = lcs_length / max_length if max_length > 0 else 0.0
+        
+        # Check for common patterns (e.g., "123 456" vs "123456")
+        target_digits = re.sub(r'[^0-9]', '', target_norm)
+        company_digits = re.sub(r'[^0-9]', '', company_norm)
+        
+        if target_digits == company_digits:
+            # Same digits, different formatting
+            return 0.95
+        
+        # Calculate digit similarity
+        digit_lcs = self._longest_common_subsequence(target_digits, company_digits)
+        max_digits = max(len(target_digits), len(company_digits))
+        digit_similarity = digit_lcs / max_digits if max_digits > 0 else 0.0
+        
+        # Return the best similarity score
+        return max(lcs_similarity, digit_similarity)
+
     def normalize_company_name(self, name: str) -> str:
         name_lower = name.lower().strip()
         for full_form, abbrev in self.legal_form_mappings.items():
@@ -71,13 +135,29 @@ class CompanyMatcher:
                 if common_words:
                     name_score = len(common_words) / max(len(search_words), len(company_words)) * 60
             
+            # Enhanced registration number scoring
             registration_bonus = 0
-            if company.hrb:
-                if target_registration and company.hrb == target_registration:
+            if target_registration and company.hrb:
+                # Calculate similarity using LCS algorithm
+                similarity = self._calculate_registration_similarity(target_registration, company.hrb)
+                
+                if similarity >= 0.95:  # Very high similarity
                     registration_bonus = 1000
+                elif similarity >= 0.8:   # High similarity
+                    registration_bonus = 800
+                elif similarity >= 0.6:   # Medium similarity
+                    registration_bonus = 500
+                elif similarity >= 0.4:   # Low similarity
+                    registration_bonus = 200
                 else:
-                    registration_bonus = 100
+                    registration_bonus = 50  # Minimal bonus for any similarity
+                
+                logger.debug(f"Registration similarity: {target_registration} vs {company.hrb} = {similarity:.3f} (bonus: {registration_bonus})")
+            elif company.hrb:
+                # Has HRB but no target specified
+                registration_bonus = 100
             else:
+                # No HRB - penalty
                 registration_bonus = -50
 
             final_score = registration_bonus + (name_score * 0.1)
