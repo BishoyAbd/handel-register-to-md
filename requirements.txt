@@ -1,4 +1,9 @@
-pdfplumber>=0.9.0
-playwright>=1.40.0
-asyncio
-pathlib2>=2.3.7; python_version < "3.4"
+# Direct dependencies for the scraper package
+# Generated from actual installed versions
+playwright==1.54.0
+pdfplumber==0.11.7
+aiofiles==24.1.0
+
+# Note: Other packages will be automatically installed as dependencies
+# when installing the scraper package via pip or uv
+ 

@@ -1,0 +1,12 @@
+{
+    "files.associations": {
+        "*.pdf": "pdf"
+    },
+    "workbench.editorAssociations": {
+        "*.pdf": "pdf.preview",
+        "*.copilotmd": "vscode.markdown.preview.editor"
+    },
+    "files.defaultLanguage": "plaintext",
+    "explorer.confirmDelete": false,
+    "explorer.confirmDragAndDrop": false
+}

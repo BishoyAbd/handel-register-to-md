@@ -1,6 +1,6 @@
 from playwright.async_api import Page
-from typing import List, Dict, Any
-from .models import Company, Document
+from typing import List, Dict, Any, Optional
+from .models import Company, Document, DocumentType
 from .logger import get_logger
 
 logger = get_logger(__name__)
@@ -78,13 +78,30 @@ class DataExtractor:
         logger.info(f"Found {len(companies)} companies.")
         return companies
 
-    async def extract_documents_for_company(self, company: Company) -> List[Document]:
+    async def extract_documents_for_company(self, company: Company, document_types: Optional[List[DocumentType]] = None) -> List[Document]:
+        """
+        Extract documents for a company, optionally filtered by document types.
+        
+        Args:
+            company: The company to extract documents for
+            document_types: Optional list of document types to filter by (AD, CD, or both)
+        """
         logger.info(f"Extracting documents for {company.name} (HRB: {company.hrb})...")
         if not company.hrb:
             return []
 
+        # If no document types specified, get all available
+        if document_types is None:
+            document_types = [DocumentType.AD, DocumentType.CD]
+        
+        # Convert enum values to strings for comparison
+        requested_types = [dt.value for dt in document_types]
+        logger.info(f"Requested document types: {requested_types}")
+
         company_docs = await self.page.evaluate("""
-            (registrationNumber) => {
+            (args) => {
+                const registrationNumber = args.registrationNumber;
+                const requestedTypes = args.requestedTypes;
                 const docs = [];
                 const tableRows = document.querySelectorAll('tr');
                 
@@ -94,7 +111,7 @@ class DataExtractor:
                         const links = row.querySelectorAll('a[id*="j_idt"]');
                         links.forEach(link => {
                             const text = link.textContent.trim();
-                            if (text === 'AD' || text === 'CD') {
+                            if (requestedTypes.includes(text)) {
                                 docs.push({
                                     id: link.id,
                                     text: text,
@@ -106,10 +123,16 @@ class DataExtractor:
                 });
                 return docs;
             }
-        """, company.hrb)
+        """, {"registrationNumber": company.hrb, "requestedTypes": requested_types})
 
         documents = [
-            Document(id=doc['id'], text=doc['text'], doc_type=doc['text'], company_name=company.name, link_id=doc['id']) 
+            Document(
+                id=doc['id'], 
+                text=doc['text'], 
+                doc_type=DocumentType(doc['text']), 
+                company_name=company.name, 
+                link_id=doc['id']
+            ) 
             for doc in company_docs
         ]
         logger.info(f"Found {len(documents)} documents for {company.name}.")

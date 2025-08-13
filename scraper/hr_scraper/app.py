@@ -1,5 +1,5 @@
 import re
-from typing import Optional
+from typing import Optional, Dict, List, Tuple, Union
 from .browser_manager import BrowserManager
 from .navigator import Navigator
 from .data_extractor import DataExtractor
@@ -8,6 +8,7 @@ from .file_manager import FileManager
 from .pdf_extractor import PDFExtractor
 from .logger import get_logger
 from .exceptions import ScraperException, CompanyNotFoundError
+from .models import DocumentType
 
 logger = get_logger(__name__)
 
@@ -18,9 +19,37 @@ class ScraperApp:
         self.company_matcher = CompanyMatcher()
         self.pdf_extractor = PDFExtractor()
 
-    async def run(self, company_name: str, registration_number: Optional[str] = None) -> dict:
-        logger.info(f"Starting scraper for: '{company_name}'")
-        extracted_markdowns = {}
+    async def run(self, company_name: str, registration_number: Optional[str] = None, 
+                  document_types: Optional[List[DocumentType]] = None) -> Dict[str, Union[str, bytes, Dict]]:
+        """
+        Run the scraper and return extracted data.
+        
+        Args:
+            company_name: Name of the company to search for
+            registration_number: Optional registration number (HRB)
+            document_types: Optional list of document types to download (AD, CD, or both)
+                           If None, downloads all available documents
+        
+        Returns:
+            Dict containing:
+            - 'success': bool indicating if scraping was successful
+            - 'error': str error message if failed, None if successful
+            - 'retry_recommended': bool indicating if retry is recommended
+            - 'company_info': dict with company details
+            - 'documents': list of dicts with document data (PDF bytes and markdown)
+            - 'debug_info': dict with debug information for troubleshooting
+        """
+        logger.info(f"Starting scraper for: '{company_name}' with document types: {[dt.value for dt in document_types] if document_types else 'all'}")
+        
+        result = {
+            'success': False,
+            'error': None,
+            'retry_recommended': False,
+            'company_info': None,
+            'documents': [],
+            'debug_info': {}
+        }
+        
         try:
             async with BrowserManager(headless=self.headless) as page:
                 navigator = Navigator(page)
@@ -34,62 +63,119 @@ class ScraperApp:
 
                 companies = await extractor.extract_companies()
                 if not companies:
-                    raise CompanyNotFoundError("No companies found on the results page.")
+                    result['error'] = "No companies found on the results page."
+                    result['retry_recommended'] = True
+                    return result
 
                 hrb_match = re.search(r'HRB\s*(\d+)', company_name, re.IGNORECASE)
                 target_hrb = registration_number or (hrb_match.group(1) if hrb_match else None)
                 best_match = self.company_matcher.find_best_match(company_name, companies, target_hrb)
                 if not best_match:
-                    raise CompanyNotFoundError("No suitable company match found.")
+                    result['error'] = "No suitable company match found."
+                    result['retry_recommended'] = True
+                    return result
 
-                # Ensure we have a registration number for the directory name
+                # Store company info
+                result['company_info'] = {
+                    'name': best_match.name,
+                    'hrb': best_match.hrb,
+                    'search_query': company_name
+                }
+
+                # Ensure we have a registration number
                 if not best_match.hrb:
-                    logger.error(f"Cannot create directory for '{best_match.name}' without a registration number.")
-                    return {}
+                    result['error'] = f"Cannot process company '{best_match.name}' without a registration number."
+                    result['retry_recommended'] = False
+                    return result
 
-                documents = await extractor.extract_documents_for_company(best_match)
+                # Extract documents with optional filtering
+                documents = await extractor.extract_documents_for_company(best_match, document_types)
                 if not documents:
-                    logger.warning(f"No documents found for '{best_match.name}'.")
-                    # Original logic: save debug files and check for messages
+                    result['error'] = f"No documents found for '{best_match.name}' with requested types: {[dt.value for dt in document_types] if document_types else 'all'}"
+                    result['retry_recommended'] = True
+                    # Save debug info for troubleshooting
                     await self.file_manager.save_debug_screenshot(page, "no_docs")
                     await self.file_manager.save_debug_html(page, "no_docs")
-                    await extractor.get_ui_messages()
-                    return {}
+                    ui_messages = await extractor.get_ui_messages()
+                    result['debug_info'] = {
+                        'screenshot_saved': True,
+                        'html_saved': True,
+                        'ui_messages': ui_messages
+                    }
+                    return result
 
-                # Use the original company name for the directory and filenames
-                company_dir = self.file_manager.create_company_directory(company_name, best_match.hrb)
-
-                downloaded_count = 0
+                # Process each document
                 for doc in documents:
                     try:
+                        # Download document
                         download = await navigator.download_document(doc.link_id)
-                        pdf_filename = self.file_manager.get_document_filename(company_name, doc.doc_type)
-                        pdf_path = company_dir / pdf_filename
-                        await self.file_manager.save_download(download, pdf_path)
-                        downloaded_count += 1
-
-                        # Phase 2: Extract content from the downloaded PDF
-                        markdown_content = self.pdf_extractor.extract_content_as_markdown(pdf_path)
                         
-                        # Save the markdown content to a file
-                        md_filename = pdf_path.with_suffix('.md').name
-                        md_path = company_dir / md_filename
-                        self.file_manager.save_markdown_content(markdown_content, md_path)
+                        # Create a temporary file for the download (needed for Playwright)
+                        import tempfile
+                        import os
+                        temp_pdf_path = tempfile.mktemp(suffix='.pdf')
                         
-                        # Store in memory to return to the client
-                        extracted_markdowns[doc.doc_type] = markdown_content
+                        try:
+                            # Save the download to the temporary file (Playwright requirement)
+                            await download.save_as(temp_pdf_path)
+                            
+                            # Read the PDF content as bytes
+                            with open(temp_pdf_path, 'rb') as f:
+                                pdf_content = f.read()
+                            
+                            # Extract markdown content from the PDF bytes (in-memory)
+                            markdown_content = self.pdf_extractor.extract_content_from_bytes(
+                                pdf_content, 
+                                f"{best_match.name}_{doc.doc_type.value}.pdf"
+                            )
+                            
+                            # Store document data - CLIENT GETS THIS!
+                            document_data = {
+                                'doc_type': doc.doc_type.value,
+                                'pdf_content': pdf_content,           # PDF as bytes for client
+                                'pdf_filename': f"{best_match.name}_{doc.doc_type.value}.pdf",
+                                'markdown_content': markdown_content, # Markdown as string for client
+                                'markdown_filename': f"{best_match.name}_{doc.doc_type.value}.md"
+                            }
+                            result['documents'].append(document_data)
+                            
+                            logger.info(f"Successfully processed document {doc.doc_type.value}: {len(pdf_content)} bytes")
+                            
+                        finally:
+                            # Clean up temporary file
+                            try:
+                                if os.path.exists(temp_pdf_path):
+                                    os.unlink(temp_pdf_path)
+                            except:
+                                pass
                         
                     except ScraperException as e:
                         logger.error(f"Failed to download or process document: {e}")
+                        result['debug_info']['document_errors'] = result['debug_info'].get('document_errors', [])
+                        result['debug_info']['document_errors'].append({
+                            'doc_type': doc.doc_type.value,
+                            'error': str(e)
+                        })
 
-                logger.info(f"Successfully downloaded and processed {downloaded_count} documents for '{company_name}'.")
+                # Mark as successful if we have at least one document
+                if result['documents']:
+                    result['success'] = True
+                    logger.info(f"Successfully processed {len(result['documents'])} documents for '{company_name}'.")
+                else:
+                    result['error'] = "Failed to process any documents."
+                    result['retry_recommended'] = True
 
         except ScraperException as e:
             logger.error(f"A scraper-related error occurred: {e}")
+            result['error'] = f"Scraper error: {str(e)}"
+            result['retry_recommended'] = True
         except Exception as e:
             logger.critical(f"An unexpected error occurred: {e}", exc_info=True)
-            # Original logic: save a final error screenshot
+            result['error'] = f"Unexpected error: {str(e)}"
+            result['retry_recommended'] = True
+            # Save debug info for unexpected errors
             if 'page' in locals():
                 await self.file_manager.save_debug_screenshot(page, "error_working")
+                result['debug_info']['error_screenshot_saved'] = True
         
-        return extracted_markdowns
+        return result
