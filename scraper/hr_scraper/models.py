@@ -4,8 +4,13 @@ from enum import Enum
 
 class DocumentType(Enum):
     """Enum for document types available in the Handelsregister"""
-    AD = "AD"  # Aktueller Abdruck (Current Extract)
-    CD = "CD"  # Chronologischer Abdruck (Chronological Extract)
+    AD = "AD"      # Aktueller Abdruck (Current Extract)
+    CD = "CD"      # Chronologischer Abdruck (Chronological Extract)
+    HD = "HD"      # Handelsregister (Commercial Register)
+    DK = "DK"      # Dokument (Document)
+    UT = "UT"      # Unternehmensregister (Company Register)
+    VÖ = "VÖ"      # Veröffentlichungen (Publications)
+    SI = "SI"      # Sonstige Informationen (Other Information)
 
 @dataclass
 class Document:

@@ -47,15 +47,17 @@ class DataExtractor:
                 for (const row of tableRows) {
                     const rowText = clean(row.textContent);
                     
-                    // Check for documents (AD/CD links)
-                    const hasDocs = Array.from(row.querySelectorAll('a[id*="j_idt"]')).some(a => {
-                        const txt = clean(a.textContent).toUpperCase();
-                        return txt === 'AD' || txt === 'CD';
+                    // Check for documents (AD/CD/HD/DK/UT/VÖ/SI links and indicators)
+                    const hasDocs = Array.from(row.querySelectorAll('a[id*="j_idt"], span.dokumentList')).some(el => {
+                        const txt = clean(el.textContent).toUpperCase();
+                        return ['AD', 'CD', 'HD', 'DK', 'UT', 'VÖ', 'SI'].includes(txt);
                     });
 
-                    // Check for HRB number
-                    const hrbMatch = rowText.match(/HRB\s*(\d+)/i);
-                    const registrationNumber = hrbMatch ? hrbMatch[1] : null;
+                    // Check for registration number (ALL German formats: HRB, HRA, PR, GnR, VR, GüR, EWIV, SE, SCE, SPE, etc.)
+                    const allPrefixes = ['HRB', 'HRA', 'PR', 'GNR', 'VR', 'GÜR', 'EWIV', 'SE', 'SCE', 'SPE'];
+                    const prefixPattern = allPrefixes.join('|');
+                    const registrationMatch = rowText.match(new RegExp(`(${prefixPattern})\\s*(\\d+)`, 'i'));
+                    const registrationNumber = registrationMatch ? registrationMatch[1] + ' ' + registrationMatch[2] : null;
 
                     // More flexible: accept rows that have either documents OR HRB OR look like company data
                     const hasCompanyData = rowText.length > 20 && 
@@ -150,11 +152,14 @@ class DataExtractor:
                 const registrationNumber = args.registrationNumber;
                 const requestedTypes = args.requestedTypes;
                 const docs = [];
+                
+                // Look for the company row that matches the registration number
                 const tableRows = document.querySelectorAll('tr');
                 
                 tableRows.forEach(row => {
                     const rowText = row.textContent;
-                    if (registrationNumber && rowText.includes('HRB ' + registrationNumber)) {
+                    if (registrationNumber && rowText.includes(registrationNumber)) {
+                        // Find document links in this row
                         const links = row.querySelectorAll('a[id*="j_idt"]');
                         links.forEach(link => {
                             const text = (link.textContent || '').trim();
@@ -199,7 +204,7 @@ class DataExtractor:
                 });
                 return messages;
             }
-        """, config.ERROR_MESSAGE_SELECTORS)
+        """, [])
         if messages:
             logger.info(f"Found UI messages: {messages}")
         return messages

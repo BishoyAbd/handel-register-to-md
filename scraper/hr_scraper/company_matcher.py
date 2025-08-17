@@ -49,46 +49,83 @@ class CompanyMatcher:
             return ""
         return re.sub(r'\s+', '', hrb.upper())
 
-    def _calculate_registration_similarity(self, target_hrb: str, company_hrb: str) -> float:
+    def _calculate_registration_similarity(self, target_registration: str, company_registration: str) -> float:
         """
         Calculate similarity between two registration numbers using multiple strategies.
         Returns a score between 0.0 and 1.0.
+        Supports ALL German commercial register formats: HRB, HRA, PR, GnR, VR, GüR, EWIV, SE, SCE, SPE, etc.
         """
-        if not target_hrb or not company_hrb:
+        if not target_registration or not company_registration:
             return 0.0
         
         # Normalize both numbers
-        target_norm = self._normalize_registration_number(target_hrb)
-        company_norm = self._normalize_registration_number(company_hrb)
+        target_norm = self._normalize_registration_number(target_registration)
+        company_norm = self._normalize_registration_number(company_registration)
         
-        # Exact match (highest priority)
-        if target_norm == company_norm:
-            return 1.0
+        # Define all possible German commercial register prefixes
+        ALL_REGISTRATION_PREFIXES = [
+            'HRB', 'HRA', 'PR', 'GNR', 'VR', 'GÜR', 'EWIV', 'SE', 'SCE', 'SPE'
+        ]
         
-        # Check if one is contained in the other
-        if target_norm in company_norm or company_norm in target_norm:
-            return 0.9
+        # Extract prefix and number parts for all registration types
+        prefix_pattern = '|'.join(ALL_REGISTRATION_PREFIXES)
+        target_parts = re.match(rf'^({prefix_pattern})\s*(\d+[A-Z]?)$', target_registration.upper())
+        company_parts = re.match(rf'^({prefix_pattern})\s*(\d+[A-Z]?)$', company_registration.upper())
         
-        # Calculate longest common subsequence similarity
+        if target_parts and company_parts:
+            target_prefix = target_parts.group(1)
+            target_num = target_parts.group(2)
+            company_prefix = company_parts.group(1)
+            company_num = company_parts.group(2)
+            
+            # Check prefix compatibility
+            prefix_match = target_prefix == company_prefix
+            
+            # Exact match (highest priority)
+            if target_norm == company_norm:
+                return 1.0
+            
+            # Same prefix, check number similarity
+            if prefix_match:
+                # Check if one is contained in the other
+                if target_num in company_num or company_num in target_num:
+                    return 0.9
+                
+                # Calculate longest common subsequence similarity for numbers
+                lcs_length = self._longest_common_subsequence(target_num, company_num)
+                max_length = max(len(target_num), len(company_num))
+                lcs_similarity = lcs_length / max_length if max_length > 0 else 0.0
+                
+                # Check for common patterns (e.g., "123 456" vs "123456")
+                target_digits = re.sub(r'[^0-9]', '', target_num)
+                company_digits = re.sub(r'[^0-9]', '', company_num)
+                
+                if target_digits == company_digits:
+                    # Same digits, different formatting
+                    return 0.95
+                
+                # Calculate digit similarity
+                digit_lcs = self._longest_common_subsequence(target_digits, company_digits)
+                max_digits = max(len(target_digits), len(company_digits))
+                digit_similarity = digit_lcs / max_digits if max_digits > 0 else 0.0
+                
+                # Return the best similarity score
+                return max(lcs_similarity, digit_similarity)
+            else:
+                # Different prefixes, but check if numbers are similar
+                lcs_length = self._longest_common_subsequence(target_num, company_num)
+                max_length = max(len(target_num), len(company_num))
+                lcs_similarity = lcs_length / max_length if max_length > 0 else 0.0
+                
+                # Lower score for different prefixes
+                return lcs_similarity * 0.7
+        
+        # Fallback to general string similarity
         lcs_length = self._longest_common_subsequence(target_norm, company_norm)
         max_length = max(len(target_norm), len(company_norm))
         lcs_similarity = lcs_length / max_length if max_length > 0 else 0.0
         
-        # Check for common patterns (e.g., "123 456" vs "123456")
-        target_digits = re.sub(r'[^0-9]', '', target_norm)
-        company_digits = re.sub(r'[^0-9]', '', company_norm)
-        
-        if target_digits == company_digits:
-            # Same digits, different formatting
-            return 0.95
-        
-        # Calculate digit similarity
-        digit_lcs = self._longest_common_subsequence(target_digits, company_digits)
-        max_digits = max(len(target_digits), len(company_digits))
-        digit_similarity = digit_lcs / max_digits if max_digits > 0 else 0.0
-        
-        # Return the best similarity score
-        return max(lcs_similarity, digit_similarity)
+        return lcs_similarity
 
     def normalize_company_name(self, name: str) -> str:
         name_lower = name.lower().strip()
@@ -154,10 +191,10 @@ class CompanyMatcher:
                 
                 logger.debug(f"Registration similarity: {target_registration} vs {company.hrb} = {similarity:.3f} (bonus: {registration_bonus})")
             elif company.hrb:
-                # Has HRB but no target specified
+                # Has registration but no target specified
                 registration_bonus = 100
             else:
-                # No HRB - penalty
+                # No registration - penalty
                 registration_bonus = -50
 
             final_score = registration_bonus + (name_score * 0.1)

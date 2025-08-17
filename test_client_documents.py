@@ -34,6 +34,187 @@ async def test_document_type_filtering():
     print("-" * 50)
     await test_specific_document_types(company_name, None)
 
+    print("🔍 Test 5: Downloading documents for HRA company 'Bode Projects e. k.'")
+    print("--------------------------------------------------")
+    print("📄 Company: Bode Projects e. k.")
+    print("📄 Registration: HRA 57863 B")
+    print("📄 Document types: All available")
+    
+    try:
+        app = ScraperApp(headless=True)
+        result = await app.run(
+            company_name="Bode Projects e. k.",
+            registration_number="HRA 57863 B"
+        )
+        
+        if result['success']:
+            print(f"✅ Successfully scraped {len(result['documents'])} documents")
+            print(f"Company: {result['company_info']['name']}")
+            print(f"Registration: {result['company_info']['hrb']}")
+            print()
+            
+            for i, doc in enumerate(result['documents'], 1):
+                print(f"📄 Document {i}: {doc['doc_type']}")
+                print(f"   PDF Filename: {doc['pdf_filename']}")
+                print(f"   PDF Size: {len(doc['pdf_content'])} bytes")
+                print(f"   Markdown Filename: {doc['markdown_filename']}")
+                print(f"   Markdown Length: {len(doc['markdown_content'])} characters")
+                
+                # Save files for verification
+                pdf_filename = f"test_HRA_{i}_Bode_Projects.pdf"
+                md_filename = f"test_HRA_{i}_Bode_Projects.md"
+                
+                with open(pdf_filename, 'wb') as f:
+                    f.write(doc['pdf_content'])
+                with open(md_filename, 'w', encoding='utf-8') as f:
+                    f.write(doc['markdown_content'])
+                
+                print(f"   💾 PDF saved as: {pdf_filename}")
+                print(f"   💾 Markdown saved as: {md_filename}")
+                
+                # Show previews
+                print(f"   🔍 PDF Preview (hex): {doc['pdf_content'][:50].hex()}...")
+                print(f"   🔍 Markdown Preview: {doc['markdown_content'][:200]}...")
+                print()
+                
+                # Document metadata
+                print(f"   📊 Document metadata:")
+                print(f"      - PDF is valid PDF")
+                print(f"      - Markdown contains {doc['markdown_content'].count('#')} sections")
+                print(f"      - Markdown contains {doc['markdown_content'].count('|')} table separators")
+                print()
+            
+            print(f"🎉 Successfully downloaded {len(result['documents'])} documents!")
+        else:
+            print(f"❌ Failed: {result['error']}")
+            if result.get('retry_recommended'):
+                print("  Consider retrying this request")
+    except Exception as e:
+        print(f"💥 Exception: {e}")
+    
+    print("\n" + "=" * 60)
+    print("🔍 Test 6: Downloading only AD documents for HRA company")
+    print("--------------------------------------------------")
+    print("📄 Company: Bode Projects e. k.")
+    print("📄 Registration: HRA 57863 B")
+    print("📄 Document types: AD only")
+    
+    try:
+        app = ScraperApp(headless=True)
+        result = await app.run(
+            company_name="Bode Projects e. k.",
+            registration_number="HRA 57863 B",
+            document_types=[DocumentType.AD]
+        )
+        
+        if result['success']:
+            print(f"✅ Successfully scraped {len(result['documents'])} AD documents")
+            print(f"Company: {result['company_info']['name']}")
+            print(f"Registration: {result['company_info']['hrb']}")
+            print()
+            
+            for i, doc in enumerate(result['documents'], 1):
+                print(f"📄 Document {i}: {doc['doc_type']}")
+                print(f"   PDF Filename: {doc['pdf_filename']}")
+                print(f"   PDF Size: {len(doc['pdf_content'])} bytes")
+                print(f"   Markdown Filename: {doc['markdown_filename']}")
+                print(f"   Markdown Length: {len(doc['markdown_content'])} characters")
+                
+                # Save files for verification
+                pdf_filename = f"test_HRA_AD_{i}_Bode_Projects.pdf"
+                md_filename = f"test_HRA_AD_{i}_Bode_Projects.md"
+                
+                with open(pdf_filename, 'wb') as f:
+                    f.write(doc['pdf_content'])
+                with open(md_filename, 'w', encoding='utf-8') as f:
+                    f.write(doc['markdown_content'])
+                
+                print(f"   💾 PDF saved as: {pdf_filename}")
+                print(f"   💾 Markdown saved as: {md_filename}")
+                
+                # Show previews
+                print(f"   🔍 PDF Preview (hex): {doc['pdf_content'][:50].hex()}...")
+                print(f"   🔍 Markdown Preview: {doc['markdown_content'][:200]}...")
+                print()
+                
+                # Document metadata
+                print(f"   📊 Document metadata:")
+                print(f"      - PDF is valid PDF")
+                print(f"      - Markdown contains {doc['markdown_content'].count('#')} sections")
+                print(f"      - Markdown contains {doc['markdown_content'].count('|')} table separators")
+                print()
+            
+            print(f"🎉 Successfully downloaded {len(result['documents'])} AD documents!")
+        else:
+            print(f"❌ Failed: {result['error']}")
+            if result.get('retry_recommended'):
+                print("  Consider retrying this request")
+    except Exception as e:
+        print(f"💥 Exception: {e}")
+    
+    print("\n" + "=" * 60)
+    print("🔍 Test 7: Downloading only CD documents for HRA company")
+    print("--------------------------------------------------")
+    print("📄 Company: Bode Projects e. k.")
+    print("📄 Registration: HRA 57863 B")
+    print("📄 Document types: CD only")
+    
+    try:
+        app = ScraperApp(headless=True)
+        result = await app.run(
+            company_name="Bode Projects e. k.",
+            registration_number="HRA 57863 B",
+            document_types=[DocumentType.CD]
+        )
+        
+        if result['success']:
+            print(f"✅ Successfully scraped {len(result['documents'])} CD documents")
+            print(f"Company: {result['company_info']['name']}")
+            print(f"Registration: {result['company_info']['hrb']}")
+            print()
+            
+            for i, doc in enumerate(result['documents'], 1):
+                print(f"📄 Document {i}: {doc['doc_type']}")
+                print(f"   PDF Filename: {doc['pdf_filename']}")
+                print(f"   PDF Size: {len(doc['pdf_content'])} bytes")
+                print(f"   Markdown Filename: {doc['markdown_filename']}")
+                print(f"   Markdown Length: {len(doc['markdown_content'])} characters")
+                
+                # Save files for verification
+                pdf_filename = f"test_HRA_CD_{i}_Bode_Projects.pdf"
+                md_filename = f"test_HRA_CD_{i}_Bode_Projects.md"
+                
+                with open(pdf_filename, 'wb') as f:
+                    f.write(doc['pdf_content'])
+                with open(md_filename, 'w', encoding='utf-8') as f:
+                    f.write(doc['markdown_content'])
+                
+                print(f"   💾 PDF saved as: {pdf_filename}")
+                print(f"   💾 Markdown saved as: {md_filename}")
+                
+                # Show previews
+                print(f"   🔍 PDF Preview (hex): {doc['pdf_content'][:50].hex()}...")
+                print(f"   🔍 Markdown Preview: {doc['markdown_content'][:200]}...")
+                print()
+                
+                # Document metadata
+                print(f"   📊 Document metadata:")
+                print(f"      - PDF is valid PDF")
+                print(f"      - Markdown contains {doc['markdown_content'].count('#')} sections")
+                print(f"      - Markdown contains {doc['markdown_content'].count('|')} table separators")
+                print()
+            
+            print(f"🎉 Successfully downloaded {len(result['documents'])} CD documents!")
+        else:
+            print(f"❌ Failed: {result['error']}")
+            if result.get('retry_recommended'):
+                print("  Consider retrying this request")
+    except Exception as e:
+        print(f"💥 Exception: {e}")
+    
+    print("\n" + "=" * 60)
+    print("All tests completed!")
+
 async def test_specific_document_types(company_name: str, document_types):
     """Test downloading specific document types"""
     try:

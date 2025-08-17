@@ -50,9 +50,11 @@ async def main():
     """Main CLI entry point"""
     parser = argparse.ArgumentParser(description="Scrape company documents from Handelsregister.")
     parser.add_argument('company_name', help='Name of the company to search for')
-    parser.add_argument('--registration-number', '-r', help='Optional registration number (HRB) for more precise matching')
-    parser.add_argument('--document-types', '-t', nargs='+', choices=['AD', 'CD'], 
-                       help='Document types to download (AD, CD, or both). If not specified, downloads all available.')
+    parser.add_argument('--document-types', '-t', nargs='+', 
+                       choices=['AD', 'CD', 'HD', 'DK', 'UT', 'VÖ', 'SI'], 
+                       help='Document types to download (AD, CD, HD, DK, UT, VÖ, SI, or any combination). If not specified, downloads all available.')
+    parser.add_argument('--registration-number', '-r', 
+                       help='Optional registration number for more precise matching. Supports all German formats: HRB, HRA, PR, GnR, VR, GüR, EWIV, SE, SCE, SPE, etc.')
     parser.add_argument('--output-dir', '-o', default='.', help='Output directory for saving files (default: current directory)')
     parser.add_argument('--json', action='store_true', help='Output results in JSON format')
     parser.add_argument('--headless', action='store_true', default=True, help='Run browser in headless mode (default: True)')

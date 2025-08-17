@@ -206,40 +206,75 @@ class ScraperApp:
 
     def _extract_hrb_from_input(self, company_name: str, registration_number: Optional[str] = None) -> Optional[str]:
         """
-        Smart extraction of HRB registration number from input.
-        Handles various formats: "HRB 123456", "123456", "123 456", "123456A", etc.
+        Smart extraction of registration numbers from input.
+        Handles ALL German commercial register formats: HRB, HRA, PR, GnR, VR, GüR, EWIV, SE, SCE, SPE, etc.
         """
         import re
         
+        # Define all possible German commercial register prefixes
+        ALL_REGISTRATION_PREFIXES = [
+            'HRB', 'HRA', 'PR', 'GNR', 'VR', 'GÜR', 'EWIV', 'SE', 'SCE', 'SPE'
+        ]
+        
         # If explicit registration number provided, clean and validate it
         if registration_number:
-            # Remove common prefixes and clean - handle both HRB and HRB: formats
-            cleaned = re.sub(r'^(hrb|hrb\s*:?\s*)', '', registration_number.lower().strip())
+            # Remove common prefixes and clean - handle ALL registration types
+            prefix_pattern = '|'.join([f'{prefix.lower()}|{prefix.lower()}\\s*:?\\s*' for prefix in ALL_REGISTRATION_PREFIXES])
+            cleaned = re.sub(rf'^({prefix_pattern})', '', registration_number.lower().strip())
+            
             # Remove spaces and validate format
             cleaned = re.sub(r'\s+', '', cleaned)
-            # Check if it's a valid HRB format (numbers + optional letter)
+            
+            # Check if it's a valid registration format (numbers + optional letter)
             if re.match(r'^\d{1,8}[a-zA-Z]?$', cleaned):
-                return cleaned.upper()
+                # Extract the original prefix for proper formatting
+                for prefix in ALL_REGISTRATION_PREFIXES:
+                    if re.match(rf'^{prefix.lower()}', registration_number.lower().strip()):
+                        return f"{prefix} {cleaned.upper()}"
+                
+                # If no prefix found, default to HRB (most common)
+                return f"HRB {cleaned.upper()}"
+            
             logger.warning(f"Invalid registration number format: {registration_number}")
             return None
         
         # Try to extract from company name
-        hrb_patterns = [
-            r'hrb\s*:?\s*(\d{1,8})\s*([a-zA-Z])?',  # HRB: 123456A or HRB 123 456
-            r'hrb\s*:?\s*(\d{1,8})',                 # HRB: 123456
-            r'(\d{1,8})\s*([a-zA-Z])?',              # 123456A or 123 456
-            r'(\d{1,8})',                             # 123456
+        registration_patterns = [
+            # Pattern with prefix: HRB: 123456A, HRA 123 456, PR 123456, etc.
+            rf'({"|".join(ALL_REGISTRATION_PREFIXES)})\s*:?\s*(\d{{1,8}})\s*([a-zA-Z])?',
+            # Pattern with prefix but no letter: HRB: 123456, HRA 123456, etc.
+            rf'({"|".join(ALL_REGISTRATION_PREFIXES)})\s*:?\s*(\d{{1,8}})',
+            # Just number with letter: 123456A or 123 456
+            r'(\d{1,8})\s*([a-zA-Z])?',
+            # Just number: 123456
+            r'(\d{1,8})',
         ]
         
-        for pattern in hrb_patterns:
+        for pattern in registration_patterns:
             match = re.search(pattern, company_name, re.IGNORECASE)
             if match:
-                number = match.group(1)
-                letter = match.group(2) if len(match.groups()) > 1 else ''
+                if len(match.groups()) >= 3:  # Has prefix, number, and letter
+                    prefix = match.group(1).upper()
+                    number = match.group(2)
+                    letter = match.group(3) if match.group(3) else ''
+                elif len(match.groups()) == 2:  # Has prefix and number, or number and letter
+                    if re.match(rf'^({"|".join(ALL_REGISTRATION_PREFIXES)})$', match.group(1), re.IGNORECASE):
+                        prefix = match.group(1).upper()
+                        number = match.group(2)
+                        letter = ''
+                    else:
+                        prefix = "HRB"  # Default prefix
+                        number = match.group(1)
+                        letter = match.group(2) if match.group(2) else ''
+                else:  # Just number
+                    prefix = "HRB"  # Default prefix
+                    number = match.group(1)
+                    letter = ''
+                
                 # Clean up the number (remove spaces)
                 clean_number = re.sub(r'\s+', '', number)
-                result = clean_number + letter.upper() if letter else clean_number
-                logger.info(f"Extracted HRB from company name: {result}")
+                result = f"{prefix} {clean_number}{letter.upper()}" if letter else f"{prefix} {clean_number}"
+                logger.info(f"Extracted registration from company name: {result}")
                 return result
         
         return None
