@@ -61,9 +61,9 @@ class ScraperApp:
                 # Perform search
                 await navigator.perform_search(company_name)
                 
-                # Small delay to ensure results are loaded
+                # Small additional stabilization wait, site can be slow to render rows
                 import asyncio
-                await asyncio.sleep(1)
+                await asyncio.sleep(0.5)
                 
                 # Extract companies from search results
                 companies = await extractor.extract_companies(search_query=company_name)

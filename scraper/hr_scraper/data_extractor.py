@@ -19,7 +19,8 @@ class DataExtractor:
         company_data = await self.page.evaluate(r"""
             (searchWords) => {
                 const companies = [];
-                const tableRows = Array.from(document.querySelectorAll('tr'));
+                const resultsForm = document.querySelector('form#ergebnissForm');
+                const tableRows = resultsForm ? Array.from(resultsForm.querySelectorAll('tr')) : [];
 
                 const clean = (txt) => (txt || '').replace(/\s+/g, ' ').trim();
                 const isCandidateText = (txt) => {
@@ -154,7 +155,8 @@ class DataExtractor:
                 const docs = [];
                 
                 // Look for the company row that matches the registration number
-                const tableRows = document.querySelectorAll('tr');
+                const resultsForm = document.querySelector('form#ergebnissForm');
+                const tableRows = resultsForm ? resultsForm.querySelectorAll('tr') : [];
                 
                 tableRows.forEach(row => {
                     const rowText = row.textContent;
